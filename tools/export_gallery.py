@@ -68,8 +68,8 @@ def ax_chain(m,f):
  D=mat_mul(mat_mul(mat_t(*t),mat_q(mul(mul(qx,qy),qz))),mat_s(*s)) # T · rotationXYZ · S; no centring (measured)
  return mat_mul(mat_mul(D,mat_t(0,-.5,0)),C),s[0],{'rotation':r,'translation_blocks':t,'scale':s}
 def ax_rig(m,f,bloom_elements,group_info,C,rig_id):
- """Bone rig replaying the model's idle animation the way AX plays it (tools/ax_anim.py), or None when
- the glow cubes never move. Only the groups between the root and a glow cube are kept."""
+ """Version 4 bone mapping with legacy idle channels (tools/ax_anim.py), or None when
+ the glow cubes never move. Runtime 0.3.1 reads AX draw poses by name; channel data is retained for v4 compatibility. Only the groups between root and glow cubes are kept."""
  idle=[a for a in m.get('animations') or [] if a.get('name')=='idle']
  if not idle or os.environ.get('NSB_AX_RIG')=='rigid':return None # NSB_AX_RIG=rigid: old static output (tests / fallback)
  idle=idle[0];order=[];index={}

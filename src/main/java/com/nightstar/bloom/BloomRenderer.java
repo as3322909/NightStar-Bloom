@@ -34,25 +34,18 @@ public final class BloomRenderer implements AutoCloseable {
     public static final int AX_CAPTURED=0,AX_UNMAPPED=1,AX_UNSUPPORTED=2;
     private static final int LIMIT=2048,PARAM_BYTES=96,DRAW_BYTES=128,MAX_POST=24,MAX_REPORTED=64,LOOKUP_CACHE=4096;
     private static final Set<String> SPACES=Set.of("item","ax"),RIGS=Set.of("static","rigid","anim","bones");
-    /** Skinned vertices per frame (20 bytes each) and live AX clocks; beyond either, new objects get no Bloom. */
-    private static final int SKIN_LIMIT=262144,CLOCK_LIMIT=4096;
-    // AX never evicts its managers, so the mirrored clocks survive reloads and close() too.
-    private final HashMap<Integer,AxAnimation.Clock> clocks=new HashMap<>();
-    private static final class Observation { int hash; long frame; double time; boolean paused; AxAnimation.Timing timing; }
-    private final ArrayList<Observation> observations=new ArrayList<>();
-    private int observationCount,observationGeneration;
-    // Animation timing per alias key (raw spellings cached like Resources.resolve); also kept across close() so
-    // clocks keep following AX while Bloom is off. Only filled once a manifest generation has loaded.
-    private final HashMap<String,AxAnimation.Timing> timings=new HashMap<>();
-    private final HashMap<String,Optional<AxAnimation.Timing>> timingLookups=new HashMap<>();
+    private static final int SKIN_LIMIT=262144;
+    private AxAnimation.Rig activeRig;
+    private Object poseOwner;
+    private long poseInvocation;
+    private String poseError="";
+    private long poseCaptures,poseMisses;
     private ByteBuffer skinData;
     private MappableRingBuffer skinRing;
     private int skinVertices,skinned,skinOverflow;
-    /** frameId: world renders (skin stream); clientFrame: MinecraftClient.render calls (AX's per-frame step). */
-    private long frameId,clientFrame;
     private Resources res;
     private final ArrayList<Draw> draws=new ArrayList<>();
-    private final Matrix4f vp=new Matrix4f(),identity=new Matrix4f(),mvp=new Matrix4f();
+    private final Matrix4f vp=new Matrix4f(),identity=new Matrix4f(),mvp=new Matrix4f(),rootInverse=new Matrix4f(),bonePose=new Matrix4f();
     private final Target[] masks=new Target[3];
     private final ArrayList<Target> down=new ArrayList<>(),up=new ArrayList<>();
     private Target scene,narrow,temp;
@@ -125,12 +118,26 @@ public final class BloomRenderer implements AutoCloseable {
     private double time;
     public void requestReload(){dirty=true;reloadState="pending";}
     public boolean disabledByIris(){return iris;}
-    private void releaseSkinBindings(){
-        for(AxAnimation.Clock c:clocks.values()){c.owner=null;c.firsts=null;c.steppedFrame=-1;}
+    private void releaseSkinBindings(){activeRig=null;poseOwner=null;poseInvocation++;}
+    public void beginAxDraw(String key,Object owner){
+        releaseSkinBindings();
+        if(!active()||key==null)return;
+        AxBinding binding=res.resolve(key);
+        if(binding==null||binding.anim==null)return;
+        activeRig=binding.anim;poseOwner=owner;
+        activeRig.pose.begin(owner,generation,poseInvocation);
     }
+    public boolean wantsAxPose(){return activeRig!=null;}
+    public void captureAxBone(String name,Matrix4f matrix,boolean visible){
+        if(activeRig==null)return;
+        if(visible)activeRig.pose.reveal(name);
+        else {if(activeRig.pose.capture(name,matrix)&&diagnostics)poseCaptures++;activeRig.pose.hide(name);}
+    }
+    public void endAxDraw(){activeRig=null;poseOwner=null;}
+    public void frame(){releaseSkinBindings();}
     public void begin(Matrix4f view,Matrix4f projection){
         count=0;overflow=0;axCaptured=axFallback=axUnmapped=axUnsupported=0;time=(System.nanoTime()-epoch)*1e-9;
-        frameId++;skinVertices=skinned=skinOverflow=0;
+        releaseSkinBindings();skinVertices=skinned=skinOverflow=0;
         if(dirty){dirty=false;failure="";loadAttempted=false;}
         vp.set(projection).mul(view);
         if(!BloomClient.config.enabled||iris||!failure.isEmpty()||loadAttempted)return;
@@ -140,10 +147,8 @@ public final class BloomRenderer implements AutoCloseable {
         try{
             load(next,MinecraftClient.getInstance().getResourceManager());
             Resources old=res;res=next;releaseSkinBindings();if(old!=null)old.close();
-            timings.clear();timingLookups.clear();
-            for(var b:next.bindings.entrySet())if(b.getValue().anim!=null)timings.put(b.getKey(),new AxAnimation.Timing(b.getValue().anim.length,b.getValue().anim.loop));
             generation++;loadError="";reportedMisses.clear();reloadState="complete";
-            BloomClient.LOG.info("Bloom v0.3.0 generation {}: {} meshes / {} textures / {} AX bindings / {} aliases / {} conflicts",generation,next.meshCount,next.textures.size(),next.axModels.size(),next.aliasCount,next.conflicts.size());
+            BloomClient.LOG.info("Bloom v0.3.1 generation {}: {} meshes / {} textures / {} AX bindings / {} aliases / {} conflicts",generation,next.meshCount,next.textures.size(),next.axModels.size(),next.aliasCount,next.conflicts.size());
             for(String c:next.conflicts)BloomClient.LOG.warn("Bloom manifest conflict: {}",c);
         }catch(Exception|LinkageError e){
             next.close();loadError=e.toString();
@@ -154,10 +159,10 @@ public final class BloomRenderer implements AutoCloseable {
     /**
      * Called for an item whose render state carries an ArcartX geometry key, i.e. AX replaced the vanilla
      * item model. The AX mesh is drawn when the manifest declares it in AX model space with a rigid rig, or with
-     * an anim rig (idle animation replayed on the CPU on a clock mirroring AX's manager for {@code axHash});
+     * an anim rig (the exact matrices captured during this display draw);
      * otherwise Bloom stays off for this object and the AX body renders untouched.
      */
-    public int captureAx(String key,Matrix4f matrix,int instance,int axHash){
+    public int captureAx(String key,Matrix4f matrix,int instance,Object owner){
         if(!active())return AX_UNMAPPED;
         AxBinding binding=res.resolve(key);
         if(binding==null){
@@ -171,7 +176,7 @@ public final class BloomRenderer implements AutoCloseable {
             return AX_UNSUPPORTED;
         }
         if(binding.anim!=null){
-            int[] firsts=skin(binding,axHash);
+            int[] firsts=skin(binding,owner,matrix);
             if(firsts==null){axUnsupported++;return AX_UNSUPPORTED;}
             for(int i=0;i<binding.meshes.size();i++){
                 if(count>=LIMIT){overflow++;break;}
@@ -182,21 +187,21 @@ public final class BloomRenderer implements AutoCloseable {
         axCaptured++;
         return AX_CAPTURED;
     }
-    /**
-     * Poses the binding's rig for the AX manager {@code axHash} and skins its meshes into this frame's vertex
-     * stream. Objects sharing a hash share AX's pose, so they are skinned once per frame and drawn from the same
-     * vertices. Returns the first skinned vertex of each mesh, or null when a budget is exhausted.
-     */
-    private int[] skin(AxBinding binding,int axHash){
-        flushObservations();
-        AxAnimation.Clock clock=clock(axHash,binding.anim.length,binding.anim.loop);
-        if(clock==null)return null;
-        if(clock.steppedFrame==frameId&&clock.owner==binding)return clock.firsts;
+    /** Copies this draw's AX-transformed vertices into the current frame stream. */
+    private int[] skin(AxBinding binding,Object owner,Matrix4f root){
+        if(!root.isFinite()||Math.abs(root.determinant())<1e-12f){poseError="singular-display-transform";return null;}
+        rootInverse.set(root).invert();
+        AxAnimation.Rig rig=binding.anim;
+        if(activeRig!=rig||poseOwner!=owner){poseError="no-current-draw";poseMisses++;return null;}
+        for(Mesh m:binding.meshes)for(int k=0;k<m.ranges.length;k+=3){
+            int bone=m.ranges[k];
+            if(rig.pose.get(bone,owner,generation,poseInvocation)==null){
+                poseError="missing-current-bone: "+rig.names[bone];poseMisses++;return null;
+            }
+        }
+        poseError="";
         int total=0;for(Mesh m:binding.meshes)total+=m.count;
         if(skinVertices+total>SKIN_LIMIT){skinOverflow++;return null;}
-        clock.pose(binding.anim);
-        clock.steppedFrame=frameId;clock.owner=binding;
-        if(clock.firsts==null||clock.firsts.length!=binding.meshes.size())clock.firsts=new int[binding.meshes.size()];
         int need=(skinVertices+total)*20;
         if(skinData==null||skinData.capacity()<need){
             ByteBuffer grown=ByteBuffer.allocateDirect(Math.min(SKIN_LIMIT*20,Math.max(need,Integer.highestOneBit(Math.max(need-1,1))<<1))).order(ByteOrder.nativeOrder());
@@ -204,12 +209,11 @@ public final class BloomRenderer implements AutoCloseable {
             skinData=grown;
         }
         skinData.limit(skinData.capacity()).position(skinVertices*20);
-        Matrix4f[] pose=binding.anim.pose;
         for(int i=0;i<binding.meshes.size();i++){
-            Mesh m=binding.meshes.get(i);clock.firsts[i]=skinVertices;
+            Mesh m=binding.meshes.get(i);rig.firsts[i]=skinVertices;
             float[] v=m.cpu;int[] r=m.ranges;
             for(int k=0;k<r.length;k+=3){
-                Matrix4f b=pose[r[k]];
+                Matrix4f b=bonePose.set(rootInverse).mul(rig.pose.get(r[k],owner,generation,poseInvocation));
                 float a00=b.m00(),a01=b.m01(),a02=b.m02(),a10=b.m10(),a11=b.m11(),a12=b.m12(),a20=b.m20(),a21=b.m21(),a22=b.m22(),a30=b.m30(),a31=b.m31(),a32=b.m32();
                 for(int j=r[k+1]*5,end=(r[k+1]+r[k+2])*5;j<end;j+=5){
                     float x=v[j],y=v[j+1],z=v[j+2];
@@ -219,55 +223,7 @@ public final class BloomRenderer implements AutoCloseable {
             skinVertices+=m.count;
         }
         skinned++;
-        return clock.firsts;
-    }
-    /** Gets (or starts) the clock for AX manager {@code axHash} and steps it for this client frame; null past CLOCK_LIMIT. */
-    private AxAnimation.Clock clock(int axHash,double length,boolean loop){
-        AxAnimation.Clock clock=clocks.get(axHash);
-        if(clock==null){if(clocks.size()>=CLOCK_LIMIT)return null;clock=new AxAnimation.Clock();clocks.put(axHash,clock);}
-        clock.observe(clientFrame,org.lwjgl.glfw.GLFW.glfwGetTime()*60,MinecraftClient.getInstance().isPaused(),length,loop);
-        return clock;
-    }
-    /** MinecraftClient.render HEAD. */
-    public void frame(){flushObservations();clientFrame++;}
-    /** True when AX model {@code key} has an animated Bloom binding, i.e. its AX renders must be observed. */
-    public boolean animated(String key){return timing(key)!=null;}
-    /**
-     * Called at the head of every ItemRenderState.render that carries an AX geometry key, in any context
-     * (world, GUI, hotbar, hand) and whether or not Bloom is enabled: AX starts and steps its manager on each
-     * of these renders, so the mirrored clock must too. Unanimated keys cost one map lookup.
-     */
-    public long observeAx(String key,int axHash){
-        AxAnimation.Timing t=timing(key);
-        if(t==null||observationCount>=8192)return -1;
-        if(observationCount==observations.size())observations.add(new Observation());
-        int index=observationCount++;Observation o=observations.get(index);
-        o.hash=axHash;o.frame=clientFrame;o.time=org.lwjgl.glfw.GLFW.glfwGetTime()*60;
-        o.paused=MinecraftClient.getInstance().isPaused();o.timing=t;
-        return ((long)observationGeneration<<32)|index;
-    }
-    /** The original RETURN ran: AX did not replace this render, so it must not start an idle clock. */
-    public void discardObservation(long token){
-        if(token<0||(int)(token>>>32)!=observationGeneration)return;
-        int index=(int)token;if(index<observationCount)observations.get(index).timing=null;
-    }
-    private void flushObservations(){
-        for(int i=0;i<observationCount;i++){
-            Observation o=observations.get(i);if(o.timing==null)continue;
-            AxAnimation.Clock c=clocks.get(o.hash);
-            if(c==null&&clocks.size()<CLOCK_LIMIT){c=new AxAnimation.Clock();clocks.put(o.hash,c);}
-            if(c!=null)c.observe(o.frame,o.time,o.paused,o.timing.length(),o.timing.loop());
-            o.timing=null;
-        }
-        observationCount=0;observationGeneration++;
-    }
-    private AxAnimation.Timing timing(String key){
-        if(timings.isEmpty())return null;
-        AxAnimation.Timing hit=timings.get(key);if(hit!=null)return hit;
-        Optional<AxAnimation.Timing> cached=timingLookups.get(key);if(cached!=null)return cached.orElse(null);
-        String n=aliasKey(key);AxAnimation.Timing found=n==null?null:timings.get(n);
-        if(timingLookups.size()<LOOKUP_CACHE)timingLookups.put(key,Optional.ofNullable(found));
-        return found;
+        return rig.firsts;
     }
     /** Vanilla item_model path; also the fallback for AX-tagged items that AX itself did not replace. */
     public void capture(Identifier id,Matrix4f matrix,int instance,boolean axFallbackPath){
@@ -318,7 +274,7 @@ public final class BloomRenderer implements AutoCloseable {
                     String space=choice(obj,"space","item",SPACES,id),rig=choice(obj,"rig","static",RIGS,id);
                     if(space.equals("item")&&!rig.equals("static"))throw new IOException("rig="+rig+" requires space=ax "+id);
                     // An AX-space XYZUV mesh must say how it follows the body: rigid (whole-model pose), anim (idle
-                    // animation replayed by Bloom) or bones (unsupported).
+                    // pose captured from AX) or bones (unsupported).
                     if(space.equals("ax")&&rig.equals("static"))throw new IOException("space=ax requires rig=rigid, anim or bones "+id);
                     AxAnimation.Rig animRig=null;
                     if(rig.equals("anim")){
@@ -349,7 +305,7 @@ public final class BloomRenderer implements AutoCloseable {
                         for(int i=0;i<br.size();i++){
                             JsonArray t=br.get(i).getAsJsonArray();if(t.size()!=3)throw new IOException("Invalid boneRanges "+id);
                             int bone=t.get(0).getAsInt(),first=t.get(1).getAsInt(),n=t.get(2).getAsInt();
-                            if(bone<0||bone>=animRig.bones.length||first!=next0||n<=0)throw new IOException("Invalid boneRanges "+id);
+                            if(bone<0||bone>=animRig.names.length||first!=next0||n<=0)throw new IOException("Invalid boneRanges "+id);
                             ranges[i*3]=bone;ranges[i*3+1]=first;ranges[i*3+2]=n;next0+=n;
                         }
                         if(next0!=vertexCount)throw new IOException("boneRanges cover "+next0+" of "+vertexCount+" vertices "+id);
@@ -540,12 +496,12 @@ public final class BloomRenderer implements AutoCloseable {
         for(Target t:down)bytes+=4L*t.w*t.h;for(Target t:up)bytes+=4L*t.w*t.h;
         var c=BloomClient.config;Resources r=res;
         String conflicts=r==null||r.conflicts.isEmpty()?"0":r.conflicts.size()+" "+r.conflicts.subList(0,Math.min(3,r.conflicts.size()));
-        return "[星辉] v0.3.0 enabled="+c.enabled+" preset="+c.preset+" motion="+c.motion+" core="+c.core+" halo="+c.halo+" quality="+c.quality
+        return "[鏄熻緣] v0.3.1 enabled="+c.enabled+" preset="+c.preset+" motion="+c.motion+" core="+c.core+" halo="+c.halo+" quality="+c.quality
             +" generation="+generation+" meshes="+(r==null?0:r.meshCount)+" textures="+(r==null?0:r.textures.size())+" visible="+count+" draws="+drawCount+" passes="+passCount
             +" targets="+(scene==null?0:6+2*levels)+" targetBytes="+bytes+" overflow="+overflow+" reload="+reloadState
             +" iris="+iris+" ax="+AxCompat.status()+" axBindings="+(r==null?0:r.axModels.size())+" aliases="+(r==null?0:r.aliasCount)
             +" axCaptured="+axCaptured+" axFallback="+axFallback+" axUnmapped="+axUnmapped+" axUnsupported="+axUnsupported
-            +" axAnimated="+skinned+" skinnedVertices="+skinVertices+" skinOverflow="+skinOverflow+" clocks="+clocks.size()
+            +" axAnimated="+skinned+" skinnedVertices="+skinVertices+" skinOverflow="+skinOverflow+" poseBones="+(r==null?0:r.all.stream().map(Mesh::anim).filter(Objects::nonNull).distinct().mapToInt(a->a.pose.size()).sum())+" clocks=0 pose="+AxPoseAdapter.state+" poseError="+poseError+" poseCaptures="+poseCaptures+" poseMisses="+poseMisses
             +" conflicts="+conflicts+" loadError="+loadError+" failure="+failure
             +(diagnostics ? "|diag seen="+diagSeen+" anc="+diagAncestor+" head="+diagHead+" ret="+diagRet
             +" noState="+diagNoState+" vanilla="+diagVanilla+" noGeo="+diagNoGeo

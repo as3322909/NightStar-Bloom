@@ -18,3 +18,8 @@ Minecraft, Fabric, ArcartX and their respective names belong to their owners.
 They are separately installed dependencies or optional integrations, not bundled products.
 Catmull–Rom interpolation uses the standard mathematical polynomial. GeckoLib 4
 sampling behavior is referenced in animation comments; no GeckoLib binary is bundled.
+
+The optional AX 2.6.72 pose adapter uses integration identifiers and binary fingerprints
+to read matrices during the installed renderer's own draw. No AX classes, bytecode,
+models, textures or decompilation output are distributed. Animation playback remains
+inside AX; this mod no longer replays its runtime animation clock.

@@ -9,7 +9,6 @@ import net.minecraft.client.render.state.CameraRenderState;
 import net.minecraft.client.util.math.MatrixStack;
 import net.minecraft.entity.decoration.DisplayEntity;
 import net.minecraft.component.DataComponentTypes;
-import java.util.Objects;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.injection.*;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
@@ -35,15 +34,13 @@ public class ItemRendererMixin {
         bloom.bloom$instance(entity.getUuid().hashCode());
         var stack=entity.getItemStack();
         bloom.bloom$model(stack.get(DataComponentTypes.ITEM_MODEL));
-        // ArcartX keys its item animation managers by this hash (its own +5555555 offset omitted): stacks that
-        // compare equal share one clock, which Bloom mirrors for animated glow meshes.
-        bloom.bloom$axHash(Objects.hash(stack.getItem().getClass(),stack.getComponents(),stack.getCount()));
+
     }
     private static final String RENDER="render(Lnet/minecraft/client/render/entity/state/ItemDisplayEntityRenderState;Lnet/minecraft/client/util/math/MatrixStack;Lnet/minecraft/client/render/command/OrderedRenderCommandQueue;IF)V";
     @Inject(method=RENDER,at=@At("HEAD"))
     private void reset(ItemDisplayEntityRenderState state,MatrixStack matrices,OrderedRenderCommandQueue queue,int light,float delta,CallbackInfo ci){
         if(BloomRenderer.diagnostics)BloomRenderer.diagHead++;
-        if(state.itemRenderState instanceof AxModelState s)s.nightstar$vanillaDrawn(false);
+        if(state.itemRenderState instanceof AxModelState s){s.nightstar$vanillaDrawn(false);BloomRenderer.INSTANCE.beginAxDraw(s.nightstar$axModel(),state);}
     }
     @Inject(method=RENDER,at=@At("RETURN"))
     private void capture(ItemDisplayEntityRenderState state,MatrixStack matrices,OrderedRenderCommandQueue queue,int light,float delta,CallbackInfo ci){
@@ -52,7 +49,8 @@ public class ItemRendererMixin {
         BloomState bloom=(BloomState)state;
         String geo=ax.nightstar$axModel();
         if(ax.nightstar$vanillaDrawn()){if(BloomRenderer.diagnostics)BloomRenderer.diagVanilla++;BloomRenderer.INSTANCE.capture(bloom.bloom$model(),matrices.peek().getPositionMatrix(),bloom.bloom$instance(),geo!=null);}
-        else if(geo!=null)BloomRenderer.INSTANCE.captureAx(geo,matrices.peek().getPositionMatrix(),bloom.bloom$instance(),bloom.bloom$axHash());
+        else if(geo!=null)BloomRenderer.INSTANCE.captureAx(geo,matrices.peek().getPositionMatrix(),bloom.bloom$instance(),state);
         else if(BloomRenderer.diagnostics)BloomRenderer.diagNoGeo++;
+        BloomRenderer.INSTANCE.endAxDraw();
     }
 }

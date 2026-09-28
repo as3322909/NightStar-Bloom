@@ -5,22 +5,19 @@ import com.nightstar.bloom.BloomRenderer;
 import net.minecraft.client.render.item.ItemRenderState;
 import net.minecraft.item.ItemDisplayContext;
 import net.minecraft.item.ItemStack;
-import java.util.Objects;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.Unique;
 import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 
-// Priority below ArcartX's default 1000: our HEAD callback must run before its cancellable one, or the renders
-// AX actually draws (the only ones that step its clock) would never be observed.
+// AX model keys and vanilla fallback detection; GUI diagnostics are opt-in.
 @Mixin(value = ItemRenderState.class, priority = 900)
 public class ItemRenderStateMixin implements AxModelState {
     @Unique private String nightstar$axModel;
     @Unique private boolean nightstar$vanillaDrawn;
     @Unique private ItemStack nightstar$axStack;
     @Unique private ItemDisplayContext nightstar$context;
-    @Unique private long nightstar$observation=-1;
     // Diagnostic: counts every call, so "our injector never fires" is distinguishable from "AX passes no geo key".
     @Inject(method = "addModelKey", at = @At("HEAD"))
     private void nightstar$captureModelKey(Object key, CallbackInfo ci) {
@@ -43,10 +40,9 @@ public class ItemRenderStateMixin implements AxModelState {
     }
     @Inject(method = "clear", at = @At("HEAD"))
     private void nightstar$clearModel(CallbackInfo ci) { nightstar$axModel = null; }
-    // Every render AX may draw steps its animation manager, in any context and with Bloom off, so observe them all.
+    // Observe only diagnostic traffic here; animation poses come from the AX draw tap.
     @Inject(method = "render", at = @At("HEAD"), order = 900)
     private void nightstar$observeAx(CallbackInfo ci) {
-        nightstar$observation=-1;
         String key = nightstar$axModel;ItemStack stack = nightstar$axStack;
         if (BloomRenderer.diagnostics) {
         if (nightstar$context == ItemDisplayContext.GUI) {
@@ -67,13 +63,11 @@ public class ItemRenderStateMixin implements AxModelState {
             if (key != null) BloomRenderer.diagGuiGeo++;
         } else BloomRenderer.diagOtherHead++;
         }
-        if (key == null || stack == null || !BloomRenderer.INSTANCE.animated(key)) return;
-        nightstar$observation=BloomRenderer.INSTANCE.observeAx(key, Objects.hash(stack.getItem().getClass(), stack.getComponents(), stack.getCount()));
+
     }
     // RETURN injectors target the original return opcodes, so a HEAD cancel (ArcartX drawing the item) never reaches this.
     @Inject(method = "render", at = @At("RETURN"))
     private void nightstar$drawn(CallbackInfo ci) {
-        BloomRenderer.INSTANCE.discardObservation(nightstar$observation);
         nightstar$vanillaDrawn = true;
         if (BloomRenderer.diagnostics && nightstar$context == ItemDisplayContext.GUI) {
             BloomRenderer.diagGuiRet++;

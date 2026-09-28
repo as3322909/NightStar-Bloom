@@ -7,7 +7,7 @@
 ![Minecraft](https://img.shields.io/badge/Minecraft-1.21.11-50BEBE?style=flat-square)
 ![Fabric](https://img.shields.io/badge/Fabric-Client-D8D3CA?style=flat-square)
 ![Java](https://img.shields.io/badge/Java-21-E4AA65?style=flat-square)
-![Version](https://img.shields.io/badge/Version-0.3.0-9B8ADF?style=flat-square)
+![Version](https://img.shields.io/badge/Version-0.3.1-9B8ADF?style=flat-square)
 
 [下载版本](https://github.com/as3322909/NightStar-Bloom/releases) · [快速开始](#快速开始) · [模型制作](#制作自己的模型) · [命令](#命令与调节) · [AX 兼容](#arcartx-兼容)
 
@@ -30,7 +30,7 @@ Nightstar Bloom 是一个 Fabric 客户端模组，为模型中标记的部位�
 
 测试环境：**Minecraft 1.21.11 · Java 21 · Fabric Loader 0.19.3 · Fabric API 0.141.4+1.21.11**。
 
-1. 从 [Releases](https://github.com/as3322909/NightStar-Bloom/releases) 下载 `[星辉]Nightstar-Bloom-0.3.0.jar`，放入客户端 `mods/`。
+1. 将 `[星辉]Nightstar-Bloom-0.3.1.jar` 放入客户端 `mods/`。当前源码为 0.3.1 修复版；[Releases](https://github.com/as3322909/NightStar-Bloom/releases) 已发布的 0.3.0 保持原样，0.3.1 附件尚未发布。
 2. 解压 `Nightstar-Bloom-Crystal-Examples-0.3.0.zip`，将其中 `resourcepacks/NightstarModelLab` 放入客户端 `resourcepacks/`，在游戏中启用。
 3. 在**单独的创造测试世界**中，将示例的 `saves/ModelLab/datapacks/model_lab` 文件夹放入该世界的 `datapacks/`。
 4. 进入世界执行：
@@ -146,7 +146,7 @@ python tools/export_gallery.py
 | `debug mask\|scene\|overlay\|off` | 遮罩／原场景／对齐叠加／正常显示。 |
 | `diagnostics viewport <width> <height>` | 诊断开启时设置测试客户区尺寸并去除窗口边框，重启恢复；用于精确分辨率验收。 |
 | `diagnostics on\|off` | 开发诊断，每次启动默认关闭。 |
-| `profile <label>` | 采集 30 秒帧时间，保存在本地 logs 目录。 |
+| `profile <label> [seconds]` | 采集帧时间（默认 30 秒，支持 1..120 秒），保存在本地 logs 目录。 |
 
 想保留切面、增强外围辉光，先调 `halo`；想扩大范围，再调 `radius`。使用 `core` 调本体亮度，避免把所有参数一起拉高。
 
@@ -166,13 +166,13 @@ python tools/export_gallery.py
 | AX 无对应绑定／不支持 | 保留本体，不添加错误辉光。 |
 | GUI、手持、玩家、生物、时装、非 idle | 本版不提供这些路径的辉光。 |
 
-GUI 与手持可能参与动画计时观察，但不进入世界 Bloom 合成。AX 升级后需重新验证。
+0.3.1 直接使用 AX 同次绘制的骨骼矩阵，不再维护独立动画时钟；模型先播放、后加载发光清单，也能跟随当前姿态。GUI 与手持不进入世界 Bloom 合成。适配入口只对已验证的 AX 2.6.72 二进制启用；版本或入口变化时暂停动画辉光，在 `status` 中提示，本体显示不受影响。AX 升级后需重新验证。
 
 ## 性能与限制
 
-无可见光源时跳过合成，关闭时释放 GPU 目标。每帧上限为 2048 条网格和 262144 个蒙皮顶点，动画时钟上限为 4096。更高分辨率、质量和独立动画实例会增加成本。
+无可见光源时跳过合成，关闭时释放 GPU 目标。每帧上限为 2048 条网格和 262144 个蒙皮顶点，每个动画绑定最多 4096 个骨骼，姿态缓存随资源释放。更高分辨率、质量和独立动画实例会增加成本。
 
-0.3.0 候选版实机短测（2026-09-29）：i5-12400F / RTX 3070，实际 1920×1080 帧缓冲、medium、默认参数，各采集 10 秒真实渲染帧间隔；截图与采样分开进行。
+0.3.1 修复版实机短测（2026-09-29）：i5-12400F / RTX 3070，实际 1920×1080 帧缓冲、medium、默认参数，各采集 10 秒真实渲染帧间隔；截图与采样分开进行。
 
 | 场景 | 平均 FPS | 1% low FPS | 平均帧时间 | p99 帧时间 |
 | :--- | ---: | ---: | ---: | ---: |
@@ -199,7 +199,9 @@ GUI 与手持可能参与动画计时观察，但不进入世界 Bloom 合成。
 & '.\构建工具\scripts\build.ps1' -Project nightstar-bloom -Tasks build -Offline
 ```
 
-离线回归：`python tools/test_export.py`；生成晶体后运行 `python tools/check_export.py`。
+构建会执行姿态生命周期回归。转换回归：`python tools/test_export.py`；仓库门禁回归：`python tools/test_public_audit.py`。
+
+公开仓库只允许自制示例晶块。每次推送前运行 `python tools/public_audit.py preflight`，推送后依次运行 `remote-current`、`remote-history`、`remote-releases` 三轮检查；规则见 [AGENTS.md](AGENTS.md)。第三方测试模型和本地验收资料不进入仓库。
 
 </details>
 

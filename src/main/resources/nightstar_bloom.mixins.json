@@ -11,9 +11,11 @@
     "ItemRendererMixin",
     "DisplayRendererMixin",
     "WorldRendererMixin",
-    "FrameMixin"
+    "FrameMixin",
+    "AxBoneMixin"
   ],
   "injectors": {
     "defaultRequire": 1
-  }
+  },
+  "plugin": "com.nightstar.bloom.mixin.BloomMixinPlugin"
 }

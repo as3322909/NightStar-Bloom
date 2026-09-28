@@ -32,3 +32,7 @@ docs/ax-ArcartXHook-code.txt
 docs/ax-EntityRenderDispatcherMixin.javap.txt
 docs/ax-class-candidates.txt
 docs/ax-nonshadow-classes.txt
+
+!tools/public_audit.py
+!tools/public-assets.json
+!tools/test_public_audit.py

@@ -11,7 +11,4 @@ public class ItemStateMixin implements BloomState {
     @Unique private Identifier bloom$id;
     public Identifier bloom$model(){return bloom$id;}
     public void bloom$model(Identifier id){bloom$id=id;}
-    @Unique private int bloom$axHash;
-    public int bloom$axHash(){return bloom$axHash;}
-    public void bloom$axHash(int hash){bloom$axHash=hash;}
 }

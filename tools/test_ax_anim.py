@@ -1,6 +1,6 @@
 """Offline checks for the AX animation rig (tools/ax_anim.py + export_gallery ax_rig).
 usage: test_ax_anim.py <anim models.json> <rigid models.json> <bbmodel>
-Also the reference skinning the Java runtime (BloomRenderer.AnimRig) must match."""
+Checks legacy v4 conversion data. Since 0.3.1 the runtime consumes AX draw poses, not these clocks."""
 import json,sys,os,math
 sys.path.insert(0,os.path.dirname(os.path.abspath(__file__)))
 import ax_anim as A

@@ -14,7 +14,7 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
  * ItemRenderStateMixin never sees a call on one of these. The 2026-09-29 tagged-inventory probe confirmed
  * geoGui > 0 with base guiAll = 0 (docs/AX-GLOW-DIAGNOSTIC-STATUS.md). A tagged, open GUI with keyed all = 0
  * would invalidate the hypothesis; empty scenes cannot decide it.
- * Store the same raw key in the inherited state so its render observer also follows GUI-first idle clocks.
+ * Store the same raw key in the inherited state for consistent AX identification across display contexts.
  * This does not submit GUI geometry to the world's Bloom pass. The base clear() hook clears this field.
  */
 @Mixin(value = KeyedItemRenderState.class, priority = 900)
