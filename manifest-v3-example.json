@@ -1,0 +1,26 @@
+{
+  "version": 3,
+  "models": [
+    {
+      "id": "nightstar:crystal_0_1",
+      "space": "item",
+      "rig": "static",
+      "texture": "nightstar:textures/item/crystal_0_0.png",
+      "preset": "crystal",
+      "vertices": [0, 0, 0, 0, 0, 1, 0, 0, 1, 0, 1, 1, 0, 1, 1]
+    },
+    {
+      "id": "nightstar:ax/crystal_0",
+      "space": "ax",
+      "rig": "rigid",
+      "aliases": ["nightstar_crystals/crystal_0"],
+      "texture": "nightstar:textures/item/crystal_0_0.png",
+      "preset": "crystal",
+      "color": [1, 1, 1],
+      "strength": 1,
+      "motion": "inherit",
+      "flow": { "start": [0.2, -0.6, -0.2], "dir": [0, 1, 0], "invLength": 0.82 },
+      "vertices": [0, 0, 0, 0, 0, 1, 0, 0, 1, 0, 1, 1, 0, 1, 1]
+    }
+  ]
+}

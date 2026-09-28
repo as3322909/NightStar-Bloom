@@ -1,0 +1,19 @@
+{
+  "required": true,
+  "minVersion": "0.8",
+  "package": "com.nightstar.bloom.mixin",
+  "compatibilityLevel": "JAVA_21",
+  "client": [
+    "ItemStateMixin",
+    "ItemRenderStateMixin",
+    "KeyedItemRenderStateMixin",
+    "ItemModelManagerMixin",
+    "ItemRendererMixin",
+    "DisplayRendererMixin",
+    "WorldRendererMixin",
+    "FrameMixin"
+  ],
+  "injectors": {
+    "defaultRequire": 1
+  }
+}

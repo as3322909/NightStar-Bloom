@@ -1,0 +1,27 @@
+{
+  "schemaVersion": 1,
+  "id": "nightstar_bloom",
+  "version": "${version}",
+  "name": "[星辉]Nightstar Bloom",
+  "description": "局部模型泛光与深度遮挡",
+  "authors": [
+    "阿肆 | as3322909 | 原项目：[星辉]Nightstar Bloom"
+  ],
+  "license": "LicenseRef-Nightstar-Community-1.0",
+  "contact": {"homepage":"https://github.com/as3322909/NightStar-Bloom"},
+  "environment": "client",
+  "entrypoints": {
+    "client": [
+      "com.nightstar.bloom.BloomClient"
+    ]
+  },
+  "mixins": [
+    "nightstar_bloom.mixins.json"
+  ],
+  "depends": {
+    "fabricloader": ">=0.19.3",
+    "minecraft": "~1.21.11",
+    "java": ">=21",
+    "fabric-api": "*"
+  }
+}
