@@ -20,6 +20,18 @@ public final class AxPoseTest {
         Matrix4f local=new Matrix4f().translate(1,2,3).scale(0);
         Matrix4f captured=new Matrix4f(root).mul(local);
         check(new Matrix4f(root).invert().mul(captured).equals(local,1e-5f));
+        // The AX bone matrix includes the hand/display transform. Only AX chooses it:
+        // using a pre-baked fixed transform here would displace an unanimated hand model.
+        Matrix4f hand=new Matrix4f().translate(-.6f,.2f,.1f).rotateX(1.2f).scale(.4f,.6f,.7f);
+        Matrix4f group=new Matrix4f().translate(.3f,.1f,.2f).rotateZ(.7f);
+        Matrix4f actual=new Matrix4f(root).mul(hand).mul(group);
+        Matrix4f localCaptured=new Matrix4f(root).invert().mul(actual);
+        check(new Matrix4f(root).mul(localCaptured).equals(actual,1e-5f));
+        Matrix4f otherRoot=new Matrix4f().translate(-2,5,-9).rotateY(2.4f);
+        p.begin(a,4,6);p.capture("crystal",actual);
+        Matrix4f saved=new Matrix4f(p.get(0,a,4,6));
+        p.begin(b,4,7);p.capture("crystal",new Matrix4f(otherRoot).mul(hand).mul(group));
+        check(p.get(0,a,4,6)==null&&saved.equals(actual,1e-5f));
         for(String[] names:new String[][]{{"a","a"},{null},{""}}){boolean rejected=false;try{new AxPose(names);}catch(IllegalArgumentException e){rejected=true;}check(rejected);}
         System.out.println("AxPose: copy isolation, draw/owner/generation isolation, missing/invalid/duplicate pose, zero scale and clear passed");
     }

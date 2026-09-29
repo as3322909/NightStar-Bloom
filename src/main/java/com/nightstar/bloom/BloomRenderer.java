@@ -39,6 +39,7 @@ public final class BloomRenderer implements AutoCloseable {
     private Object poseOwner;
     private long poseInvocation;
     private String poseError="";
+    private boolean worldCapture;
     private long poseCaptures,poseMisses;
     private ByteBuffer skinData;
     private MappableRingBuffer skinRing;
@@ -57,7 +58,16 @@ public final class BloomRenderer implements AutoCloseable {
     private GpuSampler linear,nearest;
     private boolean loadAttempted;
     private volatile boolean dirty=true;
-    private final boolean iris=FabricLoader.getInstance().isModLoaded("iris");
+    /**
+     * Iris is an optional render pipeline provider.  Earlier releases treated its presence as a
+     * reason to skip Bloom completely.  That made an otherwise compatible Iris installation look
+     * like a hard incompatibility.  We keep the detection only for reporting and for a narrow,
+     * runtime fallback when the active framebuffer cannot provide the attachments Bloom needs.
+     */
+    private final boolean irisPresent=FabricLoader.getInstance().isModLoaded("iris");
+    private volatile boolean irisActive;
+    private volatile String irisCompatibility=irisPresent?"checking":"absent";
+    private volatile String irisError="";
     private final long epoch=System.nanoTime();
     public String failure="",loadError="",reloadState="pending";
     public long frames,passCount,drawCount;
@@ -99,6 +109,18 @@ public final class BloomRenderer implements AutoCloseable {
         var d=stack.get(net.minecraft.component.DataComponentTypes.CUSTOM_DATA);
         return d!=null&&!d.copyNbt().getString("model","").isEmpty();
     }
+    /**
+     * Returns the AX geometry key from the same custom_data field ArcartX uses when it selects a model.
+     * This is intentionally a pure read: the render hook supplies the current item stack and matrix, so
+     * equipment/hand rendering does not need a second model lookup or a guessed animation clock.
+     */
+    public static String axModelKey(ItemStack stack){
+        if(stack==null||stack.isEmpty())return null;
+        var d=stack.get(net.minecraft.component.DataComponentTypes.CUSTOM_DATA);
+        if(d==null)return null;
+        String model=d.copyNbt().getString("model","");
+        return model.isBlank()?null:(model.startsWith("arcartx_geo:")?model:"arcartx_geo:"+model);
+    }
     public static void setDiagnostics(boolean enabled){
         diagnostics=enabled;
         if(!enabled)return;
@@ -116,8 +138,31 @@ public final class BloomRenderer implements AutoCloseable {
     private int overflow,axCaptured,axFallback,axUnmapped,axUnsupported,generation;
     private final Set<String> reportedMisses=new HashSet<>();
     private double time;
-    public void requestReload(){dirty=true;reloadState="pending";}
-    public boolean disabledByIris(){return iris;}
+    private volatile BbmodelScanner.Snapshot autoResources=BbmodelScanner.Snapshot.empty();
+    private volatile BbmodelScanner.Snapshot pendingAuto;
+    private volatile String autoError="";
+    private volatile boolean rejectPendingAuto;
+    public void reload(ResourceManager manager){
+        pendingAuto=null;
+        try{pendingAuto=BbmodelScanner.scan(manager);autoError="";rejectPendingAuto=false;}
+        catch(Exception e){autoError=e.toString();rejectPendingAuto=true;BloomClient.LOG.error("Automatic BB reload rejected; retaining the previous generation",e);}
+        requestReload();
+    }
+    public void requestReload(){
+        dirty=true;reloadState="pending";
+        if(irisPresent){irisCompatibility="checking";irisError="";}
+    }
+    /** Kept for callers compiled against 0.3.x; Iris is no longer an unconditional disable switch. */
+    public boolean disabledByIris(){return false;}
+    public boolean irisPresent(){return irisPresent;}
+    public boolean irisActive(){return irisActive;}
+    public String irisCompatibility(){return irisCompatibility;}
+    public String irisStatus(){
+        return "presence="+(irisPresent?"present":"absent")
+            +" active="+(irisActive?"loaded":"inactive")
+            +" compat="+irisCompatibility
+            +(IrisCompat.error.isEmpty()?"":" apiError="+IrisCompat.error)+(irisError.isEmpty()?"":" error="+irisError);
+    }
     private void releaseSkinBindings(){activeRig=null;poseOwner=null;poseInvocation++;}
     public void beginAxDraw(String key,Object owner){
         releaseSkinBindings();
@@ -134,26 +179,38 @@ public final class BloomRenderer implements AutoCloseable {
         else {if(activeRig.pose.capture(name,matrix)&&diagnostics)poseCaptures++;activeRig.pose.hide(name);}
     }
     public void endAxDraw(){activeRig=null;poseOwner=null;}
-    public void frame(){releaseSkinBindings();}
+    public void frame(){worldCapture=false;releaseSkinBindings();}
+    public boolean acceptsAxItems(){return worldCapture&&active();}
+    public void endWorldCapture(){worldCapture=false;releaseSkinBindings();}
     public void begin(Matrix4f view,Matrix4f projection){
+        IrisCompat.probe();if(IrisCompat.shadow())return;
+        worldCapture=true;
         count=0;overflow=0;axCaptured=axFallback=axUnmapped=axUnsupported=0;time=(System.nanoTime()-epoch)*1e-9;
         releaseSkinBindings();skinVertices=skinned=skinOverflow=0;
-        if(dirty){dirty=false;failure="";loadAttempted=false;}
+        IrisCompat.probe();irisActive=IrisCompat.shaders();
+        if(dirty){dirty=false;failure="";loadAttempted=false;if(irisPresent){irisCompatibility="checking";irisError="";}}
         vp.set(projection).mul(view);
-        if(!BloomClient.config.enabled||iris||!failure.isEmpty()||loadAttempted)return;
+        if(!BloomClient.config.enabled||!failure.isEmpty()||loadAttempted)return;
         loadAttempted=true;
         AxCompat.probe();
         Resources next=new Resources();
+        BbmodelScanner.Snapshot candidate=pendingAuto==null?autoResources:pendingAuto;
         try{
-            load(next,MinecraftClient.getInstance().getResourceManager());
-            Resources old=res;res=next;releaseSkinBindings();if(old!=null)old.close();
+            if(rejectPendingAuto)throw new IOException(autoError);
+            load(next,MinecraftClient.getInstance().getResourceManager(),candidate);
+            Resources old=res;res=next;releaseSkinBindings();draws.clear();if(old!=null)old.close();
+            autoResources=candidate;
             generation++;loadError="";reportedMisses.clear();reloadState="complete";
-            BloomClient.LOG.info("Bloom v0.3.1 generation {}: {} meshes / {} textures / {} AX bindings / {} aliases / {} conflicts",generation,next.meshCount,next.textures.size(),next.axModels.size(),next.aliasCount,next.conflicts.size());
+            if(irisPresent){irisCompatibility=irisActive?"shader-pack-unverified":"vanilla-path";irisError="";}
+            BloomClient.LOG.info("Bloom v0.3.2 generation {}: {} meshes / {} textures / {} AX bindings / {} aliases / {} conflicts",generation,next.meshCount,next.textures.size(),next.axModels.size(),next.aliasCount,next.conflicts.size());
             for(String c:next.conflicts)BloomClient.LOG.warn("Bloom manifest conflict: {}",c);
         }catch(Exception|LinkageError e){
             next.close();loadError=e.toString();
             reloadState=res!=null?"failed-kept-previous":"failed";
             BloomClient.LOG.error("Bloom manifest reload rejected; {}",res!=null?"keeping generation "+generation:"no valid generation loaded",e);
+        }finally{
+            // Commit CPU and GPU generations together. Never retain an unsuccessful staging snapshot.
+            pendingAuto=null;rejectPendingAuto=false;
         }
     }
     /**
@@ -186,6 +243,15 @@ public final class BloomRenderer implements AutoCloseable {
         }else push(binding.meshes,matrix,instance);
         axCaptured++;
         return AX_CAPTURED;
+    }
+    /** Older rigid manifests baked FIXED display transforms and cannot be used in a hand. */
+    public void captureAxItem(String key,Matrix4f matrix,int instance,Object owner,boolean fixed){
+        if(!active()||key==null)return;
+        AxBinding binding=res.resolve(key);
+        if(binding!=null&&binding.anim==null&&!fixed){
+            axUnsupported++;poseError="legacy-fixed-mesh: reload marked BB source";return;
+        }
+        captureAx(key,matrix,instance,owner);
     }
     /** Copies this draw's AX-transformed vertices into the current frame stream. */
     private int[] skin(AxBinding binding,Object owner,Matrix4f root){
@@ -231,7 +297,7 @@ public final class BloomRenderer implements AutoCloseable {
         var found=res.itemMeshes.get(id);if(found==null)return;
         push(found,matrix,instance);if(axFallbackPath)axFallback++;
     }
-    private boolean active(){return res!=null&&!iris&&failure.isEmpty()&&BloomClient.config.enabled;}
+    private boolean active(){return !IrisCompat.shadow()&&res!=null&&failure.isEmpty()&&BloomClient.config.enabled;}
     private void push(List<Mesh> found,Matrix4f matrix,int instance){
         for(Mesh mesh:found){
             if(count>=LIMIT){overflow++;return;}
@@ -249,21 +315,31 @@ public final class BloomRenderer implements AutoCloseable {
         if(!allowed.contains(v))throw new IOException("Invalid "+key+"="+v+" "+id);
         return v;
     }
-    private void load(Resources next,ResourceManager resources)throws Exception{
+    private void load(Resources next,ResourceManager resources,BbmodelScanner.Snapshot automatic)throws Exception{
         // Sorted so the result never depends on resource traversal order.
-        var found=new TreeMap<>(resources.findResources("bloom",id->id.getNamespace().equals("nightstar_bloom")&&id.getPath().endsWith(".json")));
+        Map<Identifier,JsonObject> found=new TreeMap<>();
+        for(var entry:resources.findResources("bloom",id->id.getNamespace().equals("nightstar_bloom")&&id.getPath().endsWith(".json")).entrySet())
+            try(var reader=entry.getValue().getReader()){found.put(entry.getKey(),JsonParser.parseReader(reader).getAsJsonObject());}
+        found.putAll(automatic.manifests());next.embeddedTextures.putAll(automatic.textures());next.autoModels=automatic.models();
         Map<Identifier,Identifier> owner=new HashMap<>();
         Map<String,Set<Identifier>> aliasClaims=new TreeMap<>();
         Set<Identifier> conflicted=new TreeSet<>();
         for(var entry:found.entrySet()){
-            try(var reader=entry.getValue().getReader()){
-                JsonObject root=JsonParser.parseReader(reader).getAsJsonObject();
+            try{
+                JsonObject root=entry.getValue();
                 int version=root.has("version")?root.get("version").getAsInt():1;
                 if(version<1||version>4)throw new IOException("Unsupported manifest version "+version);
                 Map<String,AxAnimation.Rig> rigs=new HashMap<>();
                 if(version>=4&&root.has("rigs"))for(var r:root.getAsJsonObject("rigs").entrySet())rigs.put(r.getKey(),AxAnimation.Rig.parse(r.getKey(),r.getValue().getAsJsonObject()));
                 for(var value:root.getAsJsonArray("models")){
                     JsonObject obj=value.getAsJsonObject();Identifier id=Identifier.of(obj.get("id").getAsString());
+                    // A marked BB source supersedes only its old exported AX binding, never vanilla meshes.
+                    if(!automatic.manifests().containsKey(entry.getKey())&&obj.has("aliases")){
+                        JsonArray kept=new JsonArray();
+                        for(JsonElement alias:obj.getAsJsonArray("aliases"))if(!automatic.aliases().contains(aliasKey(alias.getAsString())))kept.add(alias);
+                        if(kept.isEmpty())continue;
+                        obj=obj.deepCopy();obj.add("aliases",kept);
+                    }
                     Identifier previous=owner.putIfAbsent(id,entry.getKey());
                     if(previous!=null&&!previous.equals(entry.getKey())){
                         if(conflicted.add(id))next.conflicts.add("model "+id+" defined in both "+previous+" and "+entry.getKey()+"; dropped");
@@ -292,11 +368,11 @@ public final class BloomRenderer implements AutoCloseable {
                         for(JsonElement a:obj.getAsJsonArray("aliases")){String key=aliasKey(a.getAsString());if(key==null)throw new IOException("Blank alias "+id);aliasClaims.computeIfAbsent(key,k->new TreeSet<>()).add(id);}
                     }
                     JsonArray v=obj.getAsJsonArray("vertices");
-                    if(v.size()==0||v.size()%15!=0||v.size()>300000)throw new IOException("Invalid mesh "+id);
+                    if(v.size()==0||v.size()%15!=0||v.size()>SKIN_LIMIT*5)throw new IOException("Invalid mesh "+id);
                     float[] raw=new float[v.size()];
                     for(int i=0;i<raw.length;i++){float f=v.get(i).getAsFloat();if(!Float.isFinite(f))throw new IOException("Non-finite vertex "+id);raw[i]=f;}
                     int vertexCount=raw.length/5;
-                    if(!next.textures.containsKey(texture))next.textures.put(texture,Texture.read(resources,texture));
+                    if(!next.textures.containsKey(texture))next.textures.put(texture,Texture.read(resources,texture,next.embeddedTextures));
                     GpuBuffer buffer=null;float[] cpu=null;int[] ranges=null;
                     if(animRig!=null){
                         // Skinned every frame on the CPU; ranges must tile the vertex list exactly, in order.
@@ -321,6 +397,7 @@ public final class BloomRenderer implements AutoCloseable {
                 }
             }catch(Exception e){throw new IOException("Manifest "+entry.getKey()+": "+e.getMessage(),e);}
         }
+        next.embeddedTextures.clear(); // uploaded PNG bytes are temporary, not a second texture cache
         for(Identifier id:conflicted){next.itemMeshes.remove(id);next.axModels.remove(id);}
         for(var claim:aliasClaims.entrySet()){
             Set<Identifier> ids=claim.getValue();
@@ -413,11 +490,23 @@ public final class BloomRenderer implements AutoCloseable {
     }
     private void blur(Target src,Target aux,Target out,float radius,float mode){plan(src,aux,out,1f/src.w,1f/src.h,radius,mode);}
     public void render(){
+        if(IrisCompat.shadow())return;
         frames++;passCount=drawCount=0;
         var cfg=BloomClient.config;
         if(!cfg.enabled){if(postUniforms!=null||res!=null)close();return;}
-        if(iris||!failure.isEmpty()||res==null||(count==0&&!cfg.debug.equals("mask")&&!cfg.debug.equals("overlay")))return;
-        var target=MinecraftClient.getInstance().getFramebuffer();if(target.getDepthAttachmentView()==null)return;
+        if(!failure.isEmpty()||res==null||(count==0&&!cfg.debug.equals("mask")&&!cfg.debug.equals("overlay")))return;
+        var target=MinecraftClient.getInstance().getFramebuffer();
+        if(target.getDepthAttachmentView()==null){
+            if(irisPresent){
+                irisCompatibility="unsupported-no-depth";
+                irisError="active framebuffer has no depth attachment";
+            }
+            return;
+        }
+        if(irisPresent&&irisCompatibility.equals("unsupported-no-depth")){
+            irisCompatibility=irisActive?"shader-pack-unverified":"vanilla-path";
+            irisError="";
+        }
         try{
             ensure(target.textureWidth,target.textureHeight);var e=RenderSystem.getDevice().createCommandEncoder();prepareDraws(e);
             GpuBuffer skin=null;
@@ -490,16 +579,23 @@ public final class BloomRenderer implements AutoCloseable {
             Arrays.fill(postSrc,null);Arrays.fill(postAux,null);Arrays.fill(postOut,null);
         }catch(Exception|LinkageError ex){fail(ex);}
     }
-    private void fail(Throwable e){failure=e.toString();reloadState="failed";BloomClient.LOG.error("Bloom disabled after render error; all Bloom GPU resources released until the next resource reload",e);close();}
+    private void fail(Throwable e){
+        failure=e.toString();reloadState="failed";
+        if(irisPresent){
+            irisCompatibility="failed";
+            irisError=e.getClass().getSimpleName()+": "+String.valueOf(e.getMessage());
+        }
+        BloomClient.LOG.error("Bloom disabled after render error; all Bloom GPU resources released until the next resource reload",e);close();
+    }
     public String status(){
         long bytes=scene==null?0:16L*w*h+8L*narrow.w*narrow.h;
         for(Target t:down)bytes+=4L*t.w*t.h;for(Target t:up)bytes+=4L*t.w*t.h;
         var c=BloomClient.config;Resources r=res;
         String conflicts=r==null||r.conflicts.isEmpty()?"0":r.conflicts.size()+" "+r.conflicts.subList(0,Math.min(3,r.conflicts.size()));
-        return "[鏄熻緣] v0.3.1 enabled="+c.enabled+" preset="+c.preset+" motion="+c.motion+" core="+c.core+" halo="+c.halo+" quality="+c.quality
-            +" generation="+generation+" meshes="+(r==null?0:r.meshCount)+" textures="+(r==null?0:r.textures.size())+" visible="+count+" draws="+drawCount+" passes="+passCount
+        return "[星辉] v0.3.2 enabled="+c.enabled+" preset="+c.preset+" motion="+c.motion+" core="+c.core+" halo="+c.halo+" quality="+c.quality
+            +" autoModels="+(r==null?0:r.autoModels)+" autoCpuBytes="+autoResources.retainedBytes()+" autoError="+autoError+" generation="+generation+" meshes="+(r==null?0:r.meshCount)+" textures="+(r==null?0:r.textures.size())+" visible="+count+" draws="+drawCount+" passes="+passCount
             +" targets="+(scene==null?0:6+2*levels)+" targetBytes="+bytes+" overflow="+overflow+" reload="+reloadState
-            +" iris="+iris+" ax="+AxCompat.status()+" axBindings="+(r==null?0:r.axModels.size())+" aliases="+(r==null?0:r.aliasCount)
+            +" iris="+irisStatus()+" ax="+AxCompat.status()+" axBindings="+(r==null?0:r.axModels.size())+" aliases="+(r==null?0:r.aliasCount)
             +" axCaptured="+axCaptured+" axFallback="+axFallback+" axUnmapped="+axUnmapped+" axUnsupported="+axUnsupported
             +" axAnimated="+skinned+" skinnedVertices="+skinVertices+" skinOverflow="+skinOverflow+" poseBones="+(r==null?0:r.all.stream().map(Mesh::anim).filter(Objects::nonNull).distinct().mapToInt(a->a.pose.size()).sum())+" clocks=0 pose="+AxPoseAdapter.state+" poseError="+poseError+" poseCaptures="+poseCaptures+" poseMisses="+poseMisses
             +" conflicts="+conflicts+" loadError="+loadError+" failure="+failure
@@ -521,6 +617,7 @@ public final class BloomRenderer implements AutoCloseable {
     private void closeTargets(){for(int i=0;i<3;i++){if(masks[i]!=null)masks[i].close();masks[i]=null;}if(scene!=null)scene.close();if(narrow!=null)narrow.close();if(temp!=null)temp.close();scene=narrow=temp=null;down.forEach(Target::close);up.forEach(Target::close);down.clear();up.clear();w=h=levels=0;}
     /** Releases every GPU object Bloom owns. The next enabled frame reloads the manifests. */
     public void close(){
+        worldCapture=false;
         releaseSkinBindings();
         closeTargets();if(res!=null)res.close();res=null;
         if(postUniforms!=null)postUniforms.close();if(drawUniforms!=null)drawUniforms.close();if(linear!=null)linear.close();if(nearest!=null)nearest.close();
@@ -533,9 +630,10 @@ public final class BloomRenderer implements AutoCloseable {
         final Map<String,AxBinding> bindings=new HashMap<>();
         final Map<String,Optional<AxBinding>> lookups=new HashMap<>();
         final Map<String,Texture> textures=new HashMap<>();
+        final Map<String,byte[]> embeddedTextures=new HashMap<>();
         final List<Mesh> all=new ArrayList<>();
         final List<String> conflicts=new ArrayList<>();
-        int meshCount,aliasCount;
+        int meshCount,aliasCount,autoModels;
         /** Exact hit first; other spellings are normalised once and cached, so steady-state frames do not allocate. */
         AxBinding resolve(String key){
             AxBinding hit=bindings.get(key);if(hit!=null)return hit;
@@ -544,7 +642,7 @@ public final class BloomRenderer implements AutoCloseable {
             if(lookups.size()<LOOKUP_CACHE)lookups.put(key,Optional.ofNullable(found));
             return found;
         }
-        public void close(){all.forEach(m->{if(m.buffer!=null)m.buffer.close();});all.clear();textures.values().forEach(Texture::close);textures.clear();itemMeshes.clear();axModels.clear();bindings.clear();lookups.clear();}
+        public void close(){all.forEach(m->{if(m.buffer!=null)m.buffer.close();});all.clear();textures.values().forEach(Texture::close);textures.clear();embeddedTextures.clear();itemMeshes.clear();axModels.clear();bindings.clear();lookups.clear();}
     }
     /** rigid = Bloom can draw it (rigid or anim); anim != null = meshes are skinned per frame. */
     private record AxBinding(Identifier id,String rig,boolean rigid,List<Mesh> meshes,AxAnimation.Rig anim){}
@@ -553,8 +651,10 @@ public final class BloomRenderer implements AutoCloseable {
     /** first = first vertex in this frame's skin stream (anim meshes only). */
     private static class Draw{Mesh mesh;int first;double phase;final Matrix4f matrix=new Matrix4f();}
     private record Texture(GpuTexture tex,GpuTextureView view){
-        static Texture read(ResourceManager resources,String texture)throws IOException{
-            try(var input=resources.getResourceOrThrow(Identifier.of(texture)).getInputStream();var img=NativeImage.read(input)){
+        static Texture read(ResourceManager resources,String texture)throws IOException{return read(resources,texture,Map.of());}
+        static Texture read(ResourceManager resources,String texture,Map<String,byte[]> embedded)throws IOException{
+            InputStream source=embedded.containsKey(texture)?new ByteArrayInputStream(embedded.get(texture)):resources.getResourceOrThrow(Identifier.of(texture)).getInputStream();
+            try(var input=source;var img=NativeImage.read(input)){
                 var device=RenderSystem.getDevice();
                 var tex=device.createTexture(()->"Bloom source "+texture,GpuTexture.USAGE_COPY_DST|GpuTexture.USAGE_TEXTURE_BINDING,TextureFormat.RGBA8,img.getWidth(),img.getHeight(),1,1);
                 try{device.createCommandEncoder().writeToTexture(tex,img);return new Texture(tex,device.createTextureView(tex));}catch(RuntimeException e){tex.close();throw e;}

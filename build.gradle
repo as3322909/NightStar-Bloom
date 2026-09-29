@@ -28,6 +28,12 @@ tasks.register('poseTest', JavaExec) {
  mainClass = 'com.nightstar.bloom.AxPoseTest'
 }
 tasks.named('check') { dependsOn 'poseTest' }
+tasks.register('bbmodelTest', JavaExec) {
+ dependsOn testClasses
+ classpath = sourceSets.test.runtimeClasspath
+ mainClass = 'com.nightstar.bloom.BbmodelCompilerTest'
+}
+tasks.named('check') { dependsOn 'bbmodelTest' }
 
 // Tests run through poseTest, not the JUnit discovery engine.
 tasks.named('test') { failOnNoDiscoveredTests = false }

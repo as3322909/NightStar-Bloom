@@ -12,7 +12,7 @@ public final class BloomMixinPlugin implements IMixinConfigPlugin {
     public void onLoad(String pkg){}
     public String getRefMapperConfig(){return null;}
     public boolean shouldApplyMixin(String target,String mixin){
-        if(!mixin.endsWith(".AxBoneMixin"))return true;
+        if(!mixin.endsWith(".AxBoneMixin")&&!mixin.endsWith(".ArcartXRenderMixin"))return true;
         var mod=FabricLoader.getInstance().getModContainer("arcartx");
         if(mod.isEmpty()){AxPoseAdapter.state="absent";return false;}
         if(!mod.get().getMetadata().getVersion().getFriendlyString().equals("2.6.72")){AxPoseAdapter.state="unsupported-version";return false;}

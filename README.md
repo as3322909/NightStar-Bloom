@@ -7,7 +7,7 @@
 ![Minecraft](https://img.shields.io/badge/Minecraft-1.21.11-50BEBE?style=flat-square)
 ![Fabric](https://img.shields.io/badge/Fabric-Client-D8D3CA?style=flat-square)
 ![Java](https://img.shields.io/badge/Java-21-E4AA65?style=flat-square)
-![Version](https://img.shields.io/badge/Version-0.3.1-9B8ADF?style=flat-square)
+![Version](https://img.shields.io/badge/Version-0.3.2-9B8ADF?style=flat-square)
 
 [下载版本](https://github.com/as3322909/NightStar-Bloom/releases) · [快速开始](#快速开始) · [模型制作](#制作自己的模型) · [命令](#命令与调节) · [AX 兼容](#arcartx-兼容)
 
@@ -30,7 +30,7 @@ Nightstar Bloom 是一个 Fabric 客户端模组，为模型中标记的部位�
 
 测试环境：**Minecraft 1.21.11 · Java 21 · Fabric Loader 0.19.3 · Fabric API 0.141.4+1.21.11**。
 
-1. 将 `[星辉]Nightstar-Bloom-0.3.1.jar` 放入客户端 `mods/`。当前源码为 0.3.1 修复版；[Releases](https://github.com/as3322909/NightStar-Bloom/releases) 已发布的 0.3.0 保持原样，0.3.1 附件尚未发布。
+1. 从 [最新 Release](https://github.com/as3322909/NightStar-Bloom/releases/latest) 下载 `Nightstar-Bloom-0.3.2.jar`，放入客户端 `mods/`，移除旧版 Bloom JAR。游戏内显示名为 `[星辉]Nightstar Bloom`。
 2. 解压 `Nightstar-Bloom-Crystal-Examples-0.3.0.zip`，将其中 `resourcepacks/NightstarModelLab` 放入客户端 `resourcepacks/`，在游戏中启用。
 3. 在**单独的创造测试世界**中，将示例的 `saves/ModelLab/datapacks/model_lab` 文件夹放入该世界的 `datapacks/`。
 4. 进入世界执行：
@@ -43,7 +43,7 @@ Nightstar Bloom 是一个 Fabric 客户端模组，为模型中标记的部位�
 
 你会被传送到世界原点附近的晶体展台。示例会放置地板、背景和展示实体，并清理带 `nightstar_lab_model` 标签的旧展示，请在测试世界使用。数据包不会自动搭建场景。
 
-**仅安装 JAR 不会让任意模型自动发光。** 还需要模型、纹理与 Bloom 清单。Bloom 不需要服务端模组，也不提供动态方块光照。
+**自己的 AX 模型不需要安装示例包或运行转换器。** 为 BB 组添加下述正式后缀，将模型放入 AX 的 `resourcepacks/ArcartX/resource/model/` 原有目录，执行 `/nsbloom reload`。模组在资源重载时生成网格、提取纹理并绑定 AX 模型 ID，无需手工导出清单。AX 仍负责普通模型加载及握手。原版 `item_model` 示例仍使用导出资源。Bloom 不提供动态方块光照。
 
 ```mcfunction
 /nsbloom motion static
@@ -101,7 +101,13 @@ __flow_start  ───────────────→  __flow_end
 
 </details>
 
-### 导出资源
+### AX 自动加载与可选离线导出
+
+AX 自动加载支持 BB 立方体、多层分组、内嵌 PNG、多纹理、UV 旋转及正式流光标记；外部 PNG 必须位于模型目录内并使用相对路径。组名仅使用本页列出的正式后缀。静态和动画模型都使用 AX 当次绘制的骨骼姿态，避免重复应用组变换或错误套用展示朝向；发光骨骼名需唯一。不支持的几何或损坏输入会报告来源，并保留上一套有效辉光资源。
+
+可选标准资源包路径为 `assets/arcartx/model/<模型键>.bbmodel`，支持已启用目录包或 ZIP；它提供 Bloom 输入，模型本体仍需按 AX 自己的资源流程加载。不要在两条路径同时放置相同模型键。自动转换只在重载时运行，有文件、纹理、骨骼及内存预算；不在每帧扫描。
+
+以下离线工具继续用于制作原版展示和示例包，AX 用户不需要运行：
 
 转换器只需 Python 3.10+ 标准库。克隆源码，在项目根目录生成自制示例：
 
@@ -152,27 +158,33 @@ python tools/export_gallery.py
 
 ## ArcartX 兼容
 
-测试组合为 **AX 客户端 2.6.72／服务端 2.7.81**，只覆盖世界中的 `item_display`。Bloom 不替代 AX 的握手、资源加载或服务端配置。
+测试组合为 **AX 客户端 2.6.72／服务端 2.7.81**，覆盖世界中的 `item_display`，新增第三人称物品路径的臂甲静态与 idle 样本验证。Bloom 不替代 AX 的握手、资源加载或服务端配置。
 
 将示例包 `resourcepacks/ArcartX/resource/model/nightstar_crystals/` 内的模型导入已有 AX 资源流程，完成握手和加载后，在测试世界执行 `/function nightstar:ax`。
 
-清单使用 `space=ax`；刚体为 `rig=rigid`，受支持的 idle 使用转换器生成的 `rig=anim`。`aliases` 填 AX 资源键，例如 `nightstar_crystals/crystal_2`，也接受 `arcartx_geo:` 前缀。
+自动加载会在内存中生成这些映射，不需要用户编辑清单。只有选择旧离线流程时才需配置：`space=ax`，刚体 `rig=rigid`，idle `rig=anim`，`aliases` 为 AX 资源键（也接受 `arcartx_geo:` 前缀）。
 
 | 路径 | 行为 |
 | :--- | :--- |
 | 原版静态 item_display | 使用对应 item_model 网格。 |
-| AX 刚体／受支持 idle | 按别名和变换绘制辉光。 |
+| AX 刚体／受支持 idle 的 item_display | 使用同次实际绘制姿态生成辉光。 |
+| AX 第三人称手持物品路径 | 自动 BB 网格读取实际骨骼姿态；臂甲静态与 idle 样本已验证。 |
 | AX 未接管渲染 | 使用已有原版绑定，或不发光。 |
 | AX 无对应绑定／不支持 | 保留本体，不添加错误辉光。 |
-| GUI、手持、玩家、生物、时装、非 idle | 本版不提供这些路径的辉光。 |
+| GUI、第一人称、玩家／生物本体、时装 | 本版不提供独立辉光合成。 |
+| 非 idle 动画 | 未验证，不作为本版兼容承诺。 |
 
-0.3.1 直接使用 AX 同次绘制的骨骼矩阵，不再维护独立动画时钟；模型先播放、后加载发光清单，也能跟随当前姿态。GUI 与手持不进入世界 Bloom 合成。适配入口只对已验证的 AX 2.6.72 二进制启用；版本或入口变化时暂停动画辉光，在 `status` 中提示，本体显示不受影响。AX 升级后需重新验证。
+0.3.2 延续同次绘制姿态同步，并修复静态模型在第三人称物品路径中错误使用 `fixed` 变换的问题。GUI 与第一人称不进入世界 Bloom 合成。适配入口只对已验证的 AX 2.6.72 二进制启用；版本或入口变化时暂停 AX 辉光，在 `status` 中提示，本体显示不受影响。AX 升级后需重新验证。
+
+**修改 idle 后模型不动？** 当前 AX 版本可能在资源重载后保留旧动画状态。本次样本完整重启客户端后恢复播放，辉光正常跟随。可先重启排除缓存问题；Bloom 没有接管或修复 AX 动画缓存。
 
 ## 性能与限制
 
 无可见光源时跳过合成，关闭时释放 GPU 目标。每帧上限为 2048 条网格和 262144 个蒙皮顶点，每个动画绑定最多 4096 个骨骼，姿态缓存随资源释放。更高分辨率、质量和独立动画实例会增加成本。
 
-0.3.1 修复版实机短测（2026-09-29）：i5-12400F / RTX 3070，实际 1920×1080 帧缓冲、medium、默认参数，各采集 10 秒真实渲染帧间隔；截图与采样分开进行。
+自动解析只在资源重载时进行，稳定运行保留一套已验证 CPU 资源供开关及重进使用；成功重载同时替换 CPU/GPU 代次，失败丢弃候选并保留旧资源。重载期间新旧数据会短暂共存。`autoCpuBytes` 是预算估算，不是 JVM 实际堆内存。单次自动资源预算 128 MiB，最多 4096 个 BB 文件；不支持 `.axmeta.json` 附加变换的输入会明确报错。
+
+历史展示基线（2026-09-29，早期构建，非 0.3.2 性能保证）：i5-12400F / RTX 3070，实际 1920×1080 帧缓冲、medium、默认参数，各采集 10 秒真实渲染帧间隔；截图与采样分开进行。
 
 | 场景 | 平均 FPS | 1% low FPS | 平均帧时间 | p99 帧时间 |
 | :--- | ---: | ---: | ---: | ---: |
@@ -180,9 +192,10 @@ python tools/export_gallery.py
 | 三晶体 · Bloom 关闭 | 809.1 | 243.2 | 1.24 ms | 3.27 ms |
 | AX 两刚体 + 一 idle + 一原版回退 · 开启 | 578.3 | 263.1 | 1.73 ms | 3.48 ms |
 
-这是本机短时观察，另有客户端并行运行；不同场景不能直接比较成本，也不作为跨硬件性能保证。本版已完成截图和 FPS 简化验收，未执行完整压力矩阵或长期泄漏测试。
+这是本机短时观察，另有客户端并行运行；不同场景不能直接比较成本，也不作为跨硬件性能保证。本次第三人称修复已进行正常画面／遮罩截图检查，用户确认新增 idle 后模型与特效正常。对应开发候选在 854×480 下开关均约 30 FPS，受后台限帧影响，新增功能的独占开销无法判定；未执行完整压力矩阵或长期泄漏测试。
 
-- 检测到 Iris 时禁用 Bloom，不宣称光影兼容。
+- 已测试 Iris 1.10.7 + Sodium 0.8.12：关闭光影、开启 Complementary Reimagined r5.8.1 时均可发光，后者已检查不透明墙遮挡；第三人称臂甲另验证了 Complementary Unbound r5.9.1 下的对齐。通过 Iris 公共 API 排除阴影绘制，在光影世界合成后添加 Bloom；不保证其他光影包、时间抗锯齿及自定义深度处理。`shader-pack-unverified` 表示启用光影时不作通用兼容保证，并非禁止运行。
+- 自动 BB 的流光标记可被识别；复杂层级及第三人称骨骼下的流光方向尚未全面复核，当前臂甲验收使用 `motion static`。
 - 不透明墙体可以遮挡光源；玻璃、水及第三方后处理不保证合成顺序。
 - 屏幕空间辉光不会照亮周围方块。
 - 无效清单保留上一套有效资源；检查 `status` 的错误后重新 `reload`。

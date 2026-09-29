@@ -11,6 +11,6 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 public class WorldRendererMixin {
     @Inject(method="render",at=@At("HEAD"))
     private void begin(ObjectAllocator allocator,RenderTickCounter ticks,boolean outline,Camera camera,Matrix4f view,Matrix4f projection,Matrix4f culling,GpuBufferSlice fog,Vector4f fogColor,boolean sky,CallbackInfo ci){BloomRenderer.INSTANCE.begin(view,projection);}
-    @Inject(method="render",at=@At("RETURN"))
-    private void end(ObjectAllocator allocator,RenderTickCounter ticks,boolean outline,Camera camera,Matrix4f view,Matrix4f projection,Matrix4f culling,GpuBufferSlice fog,Vector4f fogColor,boolean sky,CallbackInfo ci){BloomRenderer.INSTANCE.render();}
+    @Inject(method="render",at=@At("RETURN"),order=2000)
+    private void end(ObjectAllocator allocator,RenderTickCounter ticks,boolean outline,Camera camera,Matrix4f view,Matrix4f projection,Matrix4f culling,GpuBufferSlice fog,Vector4f fogColor,boolean sky,CallbackInfo ci){BloomRenderer.INSTANCE.endWorldCapture();BloomRenderer.INSTANCE.render();}
 }

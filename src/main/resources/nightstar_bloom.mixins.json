@@ -9,6 +9,7 @@
     "KeyedItemRenderStateMixin",
     "ItemModelManagerMixin",
     "ItemRendererMixin",
+    "ArcartXRenderMixin",
     "DisplayRendererMixin",
     "WorldRendererMixin",
     "FrameMixin",
